@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="row" style="justify-content: space-between;">
+    <div style="font-size:18px;font-weight:700;">Чеки ФНС</div>
+    <form method="get" class="row" style="gap:8px;">
+      <label for="status">Статус:</label>
+      <select id="status" name="status">
+        <option value="all" {% if status == 'all' %}selected{% endif %}>Все</option>
+        <option value="accepted" {% if status == 'accepted' %}selected{% endif %}>принят</option>
+        <option value="failed" {% if status == 'failed' %}selected{% endif %}>ошибка</option>
+        <option value="pending" {% if status == 'pending' %}selected{% endif %}>в обработке</option>
+      </select>
+      <button class="btn btn-secondary">Фильтр</button>
+    </form>
+  </div>
+
+  <div style="margin-top:8px; color: var(--muted);">Всего: {{ total }}</div>
+
+  <div style="overflow:auto; margin-top:12px;">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Создан</th>
+          <th>Тип</th>
+          <th>Order</th>
+          <th>Покупатель</th>
+          <th>Сумма</th>
+          <th>Статус</th>
+          <th>FNS ID</th>
+          <th>Ошибка</th>
+          <th>Действия</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in receipts %}
+        <tr>
+          <td>{{ r.id }}</td>
+          <td>{{ r.created_at }}</td>
+          <td>{{ r.type }}</td>
+          <td>{{ r.order_id or '—' }}</td>
+          <td>{{ r.buyer_tg_id or '—' }}</td>
+          <td>{{ '%.2f' % (r.amount_minor/100) }} RUB</td>
+          <td>{% if r.status == 'accepted' %}<span style="color:#22c55e;">принят</span>{% elif r.status == 'failed' %}<span style="color:#ef4444;">ошибка</span>{% else %}в обработке{% endif %}</td>
+          <td>{{ r.fns_id or '—' }}</td>
+          <td style="max-width:360px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="{{ r.error_text }}">{{ r.error_text or '—' }}</td>
+          <td>
+            {% if r.status != 'accepted' %}
+            <form method="post" action="/admin/receipts/{{ r.id }}/resend" style="display:inline;">
+              <button class="btn btn-primary btn-icon" title="Переотправить">↻</button>
+            </form>
+            {% else %}
+            —
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+

@@ -34,6 +34,13 @@ def create_app() -> FastAPI:
             logger.bind(event="db_init_error", error=str(e)).error("Ошибка инициализации базы данных")
             # Не прерываем запуск приложения, но логируем ошибку
         
+        # Инициализация клиента «Мой Налог», если включено
+        try:
+            from app.services.nalogo_client import ensure_inited
+            await ensure_inited()
+        except Exception as e:
+            logger.bind(event="nalogo.init_error", error=str(e)).warning("Не удалось инициализировать NaloGO на старте")
+
         await setup_webhook()
         logger.bind(event="webhook_setup").info("Webhook configured", url=settings.webhook_url)
 

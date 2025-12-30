@@ -3,13 +3,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.db.session import get_db_session
-from app.models import Order, Item, Purchase, ItemType, OrderStatus, User, ItemCode
+from app.models import Order, Item, Purchase, ItemType, OrderStatus, User, ItemCode, Receipt, ReceiptStatus, ReceiptType
 from aiogram import Bot
 from bot.webhook_app import bot as global_bot
 from app.config import settings
 from app.services.delivery import DeliveryService
 from app.utils.texts import load_texts
 from app.services.yookassa import verify_webhook_basic, is_trusted_yookassa_ip, YooKassaClient
+from app.services.nalogo_client import send_income as nalogo_send_income
 
 router = APIRouter(prefix="/payments", tags=["payments"]) 
 
@@ -59,6 +60,43 @@ async def yookassa_webhook(
     elif isinstance(donation_raw, str):
         donation_flag = donation_raw.strip().lower() in {"true", "1", "yes"}
     if donation_flag:
+        # Отправка чека ФНС для доната (если включено) + запись в БД
+        try:
+            amount_value = (obj.get("amount", {}) or {}).get("value")
+            buyer_tg_id = metadata.get("buyer_tg_id")
+            try:
+                buyer_tg_id_int = int(buyer_tg_id) if buyer_tg_id is not None and str(buyer_tg_id).isdigit() else None
+            except Exception:
+                buyer_tg_id_int = None
+            # Преобразуем сумму в minor (копейки)
+            from decimal import Decimal, ROUND_HALF_UP
+            amount_minor = int((Decimal(str(amount_value or "0")) * Decimal(100)).quantize(0, rounding=ROUND_HALF_UP))
+            rec = Receipt(
+                type=ReceiptType.DONATION,
+                order_id=None,
+                buyer_tg_id=str(buyer_tg_id) if buyer_tg_id is not None else None,
+                title="Донат",
+                amount_minor=amount_minor,
+                currency="RUB",
+                status=ReceiptStatus.PENDING,
+            )
+            db.add(rec)
+            await db.flush()
+            uuid = await nalogo_send_income("Донат", amount_minor, order_id=None, buyer_tg_id=buyer_tg_id_int)
+            from datetime import datetime
+            rec.attempts_count = (rec.attempts_count or 0) + 1
+            rec.last_attempt_at = datetime.utcnow()
+            if uuid:
+                rec.status = ReceiptStatus.ACCEPTED
+                rec.fns_id = uuid
+                rec.error_text = None
+            else:
+                rec.status = ReceiptStatus.FAILED
+            db.add(rec)
+            await db.commit()
+        except Exception:
+            pass
+        # Уведомление админа
         if settings.admin_chat_id:
             try:
                 amount_value = (obj.get("amount", {}) or {}).get("value")
@@ -150,6 +188,41 @@ async def yookassa_webhook(
                 pass
 
     await db.commit()
+
+    # Отправка чека ФНС (если включено) + запись в БД
+    try:
+        buyer_tg_id_int = None
+        if order.buyer_tg_id:
+            try:
+                buyer_tg_id_int = int(order.buyer_tg_id)
+            except Exception:
+                buyer_tg_id_int = None
+        title_for_receipt = item.title if item else "Покупка"
+        rec = Receipt(
+            type=ReceiptType.PURCHASE,
+            order_id=order.id,
+            buyer_tg_id=str(order.buyer_tg_id) if order.buyer_tg_id else None,
+            title=title_for_receipt,
+            amount_minor=order.amount_minor,
+            currency="RUB",
+            status=ReceiptStatus.PENDING,
+        )
+        db.add(rec)
+        await db.flush()
+        uuid = await nalogo_send_income(title_for_receipt, order.amount_minor, order_id=order.id, buyer_tg_id=buyer_tg_id_int)
+        from datetime import datetime
+        rec.attempts_count = (rec.attempts_count or 0) + 1
+        rec.last_attempt_at = datetime.utcnow()
+        if uuid:
+            rec.status = ReceiptStatus.ACCEPTED
+            rec.fns_id = uuid
+            rec.error_text = None
+        else:
+            rec.status = ReceiptStatus.FAILED
+        db.add(rec)
+        await db.commit()
+    except Exception:
+        pass
 
     if settings.admin_chat_id:
         try:

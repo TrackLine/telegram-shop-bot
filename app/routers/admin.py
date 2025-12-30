@@ -20,7 +20,9 @@ import hmac
 from aiogram.types import FSInputFile
 from app.config import settings
 from app.db.session import get_db_session
-from app.models import Item, ItemType, Order, Purchase, User, ItemCode
+from app.models import Item, ItemType, Order, Purchase, User, ItemCode, Receipt
+from app.models import ReceiptStatus, ReceiptType
+from app.services.nalogo_client import send_income as nalogo_send_income
 from app.utils.texts import load_texts
 
 security = HTTPBasic()
@@ -515,6 +517,44 @@ async def items_delete(item_id: int, db: AsyncSession = Depends(get_db_session),
     await db.delete(item)
     await db.commit()
     return RedirectResponse(url="/admin/items", status_code=303)
+
+
+# Чеки ФНС
+@router.get("/receipts")
+async def receipts_list(request: Request, db: AsyncSession = Depends(get_db_session), _: None = Depends(ensure_auth), status: str | None = None, page: int = 1):
+    page_size = 20
+    stmt = select(Receipt)
+    if status and status not in {"all", ""}:
+        stmt = stmt.where(Receipt.status == status)
+    total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+    receipts = (await db.execute(stmt.order_by(Receipt.id.desc()).offset((page-1)*page_size).limit(page_size))).scalars().all()
+    return templates.TemplateResponse("receipts_list.html", {"request": request, "receipts": receipts, "page": page, "page_size": page_size, "total": total, "status": status or "all"})
+
+
+@router.post("/receipts/{receipt_id}/resend")
+async def receipts_resend(receipt_id: int, db: AsyncSession = Depends(get_db_session), _: None = Depends(ensure_auth)):
+    from datetime import datetime
+    rec = (await db.execute(select(Receipt).where(Receipt.id == receipt_id))).scalar_one_or_none()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+    buyer_tg_id_int = None
+    if rec.buyer_tg_id:
+        try:
+            buyer_tg_id_int = int(rec.buyer_tg_id)
+        except Exception:
+            buyer_tg_id_int = None
+    uuid = await nalogo_send_income(rec.title, rec.amount_minor, order_id=rec.order_id, buyer_tg_id=buyer_tg_id_int)
+    rec.attempts_count = (rec.attempts_count or 0) + 1
+    rec.last_attempt_at = datetime.utcnow()
+    if uuid:
+        rec.status = ReceiptStatus.ACCEPTED
+        rec.fns_id = uuid
+        rec.error_text = None
+    else:
+        rec.status = ReceiptStatus.FAILED
+    db.add(rec)
+    await db.commit()
+    return RedirectResponse(url="/admin/receipts", status_code=303)
 
 
 # Переключение видимости товара

@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # Donate
     donate_amounts: str | None = Field(alias="DONATE_AMOUNTS", default=None)
 
+    # NaloGO (Мой Налог) — отправка чеков
+    nalogo_enabled: bool = Field(alias="NALOGO_ENABLED", default=False)
+    nalogo_inn: str | None = Field(alias="NALOGO_INN", default=None)
+    nalogo_password: str | None = Field(alias="NALOGO_PASSWORD", default=None)
+    nalogo_storage_path: str = Field(alias="NALOGO_STORAGE_PATH", default="nalogo_tokens.json")
+    nalogo_device_id: str = Field(alias="NALOGO_DEVICE_ID", default="tg-shop-bot")
+
     # Абсолютный путь к .env относительно корня проекта
     _env_path = (Path(__file__).resolve().parents[1] / ".env").as_posix()
     model_config = SettingsConfigDict(env_file=_env_path, env_file_encoding="utf-8", extra="ignore")
